@@ -5,6 +5,7 @@ import {
   hasApiKey,
   getApiKeyLastUpdated,
 } from '../services/api';
+import { useAuth } from './AuthContext';
 
 interface ApiConfigContextType {
   apiKey: string;
@@ -17,6 +18,7 @@ interface ApiConfigContextType {
 const ApiConfigContext = createContext<ApiConfigContextType | undefined>(undefined);
 
 export const ApiConfigProvider = ({ children }: { children: ReactNode }) => {
+  const { isAuthenticated } = useAuth();
   const [apiKey, setApiKeyState] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
@@ -41,7 +43,8 @@ export const ApiConfigProvider = ({ children }: { children: ReactNode }) => {
     <ApiConfigContext.Provider
       value={{
         apiKey,
-        isConfigured: hasApiKey(),
+        // Autenticado por sessão (login) OU, no modo legado, por API key.
+        isConfigured: isAuthenticated || hasApiKey(),
         lastUpdated,
         setApiKey,
         clearApiKey,

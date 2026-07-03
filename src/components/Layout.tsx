@@ -10,7 +10,7 @@ const navItems = [
 ];
 
 export const Layout = () => {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 

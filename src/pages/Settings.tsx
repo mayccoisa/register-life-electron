@@ -30,9 +30,9 @@ export const Settings = () => {
     const value = (e.target as HTMLFormElement).apiKey?.value?.trim();
     if (!value) {
       if (isConfigured) {
-        setMessage({ type: 'success', text: 'Chave API mantida.' });
+        setMessage({ type: 'success', text: 'Nada alterado — você já está conectado.' });
       } else {
-        setMessage({ type: 'error', text: 'Informe a chave API.' });
+        setMessage({ type: 'error', text: 'Informe a chave API (opcional) ou faça login com email e senha.' });
       }
       setSaving(false);
       return;
@@ -63,13 +63,14 @@ export const Settings = () => {
           </div>
           <h2>Configurações da API</h2>
           <p className={styles.subtitle}>
-            Conecte-se ao Register Life informando sua chave API. Ela é armazenada localmente no seu computador.
+            Você já se conecta com seu login e senha — a chave API é opcional e serve apenas
+            como método alternativo (legado). Se informada, é armazenada localmente no seu computador.
           </p>
 
           <div className={styles.statusSection}>
             <div className={isConfigured ? styles.statusOk : styles.statusNotConfigured}>
               {isConfigured ? <CheckCircle size={20} /> : <XCircle size={20} />}
-              <span>{isConfigured ? 'Chave API configurada' : 'Chave API não configurada'}</span>
+              <span>{isConfigured ? 'Conectado' : 'Não conectado'}</span>
             </div>
             {isConfigured && lastUpdated && (
               <p className={styles.lastUpdated}>

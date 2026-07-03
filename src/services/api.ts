@@ -31,6 +31,101 @@ export function hasApiKey(): boolean {
   return !!getApiKey();
 }
 
+// =============================================================
+// SESSÃO (JWT) — autenticação por email/senha via /auth/login.
+// A API Key continua aceita como fallback legado, mas não é mais
+// necessária: o login guarda token + refresh_token e renova sozinho.
+// =============================================================
+
+const TOKEN_STORAGE = 'register-life-token';
+const REFRESH_TOKEN_STORAGE = 'register-life-refresh-token';
+const TOKEN_EXPIRES_AT_STORAGE = 'register-life-token-expires-at';
+
+interface SessionData {
+  token: string;
+  refresh_token: string;
+  expires_at?: string;
+}
+
+export function setSession(session: SessionData): void {
+  localStorage.setItem(TOKEN_STORAGE, session.token);
+  localStorage.setItem(REFRESH_TOKEN_STORAGE, session.refresh_token);
+  if (session.expires_at) {
+    localStorage.setItem(TOKEN_EXPIRES_AT_STORAGE, session.expires_at);
+  } else {
+    localStorage.removeItem(TOKEN_EXPIRES_AT_STORAGE);
+  }
+}
+
+export function clearSession(): void {
+  localStorage.removeItem(TOKEN_STORAGE);
+  localStorage.removeItem(REFRESH_TOKEN_STORAGE);
+  localStorage.removeItem(TOKEN_EXPIRES_AT_STORAGE);
+}
+
+export function hasSession(): boolean {
+  return !!localStorage.getItem(REFRESH_TOKEN_STORAGE) || !!localStorage.getItem(TOKEN_STORAGE);
+}
+
+// Single-flight: refresh tokens do Supabase são de uso único, então duas
+// renovações concorrentes invalidariam a sessão.
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function refreshSession(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE);
+      if (!refreshToken) return null;
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.token) {
+          clearSession();
+          return null;
+        }
+        setSession({
+          token: data.token,
+          refresh_token: data.refresh_token,
+          expires_at: data.expires_at,
+        });
+        return data.token as string;
+      } catch {
+        // Falha de rede: mantém a sessão para tentar de novo depois.
+        return null;
+      }
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/** Token válido, renovando com 60s de folga antes de expirar. */
+async function getAccessToken(): Promise<string | null> {
+  const token = localStorage.getItem(TOKEN_STORAGE);
+  if (!token) return hasSession() ? refreshSession() : null;
+  const expiresAt = localStorage.getItem(TOKEN_EXPIRES_AT_STORAGE);
+  if (expiresAt) {
+    const msLeft = new Date(expiresAt).getTime() - Date.now();
+    if (Number.isFinite(msLeft) && msLeft < 60_000) {
+      return (await refreshSession()) ?? token;
+    }
+  }
+  return token;
+}
+
+async function buildAuthHeaders(): Promise<Record<string, string>> {
+  const token = await getAccessToken();
+  if (token) return { Authorization: `Bearer ${token}` };
+  const apiKey = getApiKey();
+  if (apiKey) return { 'X-API-Key': apiKey };
+  throw new Error('Sessão expirada. Faça login novamente.');
+}
+
 export interface User {
   id: string;
   name: string;
@@ -132,18 +227,25 @@ async function fetchApi<T>(
   options: RequestInit & { normalizer?: (r: Record<string, unknown>) => T } = {}
 ): Promise<T | T[]> {
   const { normalizer, ...fetchOptions } = options;
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error('Chave API não configurada. Acesse Configurações.');
-
   const url = `${API_BASE_URL}${endpoint}`;
-  const res = await fetch(url, {
-    ...fetchOptions,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-      ...fetchOptions.headers,
-    },
-  });
+
+  const doFetch = async () =>
+    fetch(url, {
+      ...fetchOptions,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await buildAuthHeaders()),
+        ...fetchOptions.headers,
+      },
+    });
+
+  let res = await doFetch();
+
+  // Token rejeitado (expirado/revogado): renova e tenta uma única vez.
+  if (res.status === 401 && hasSession()) {
+    const renewed = await refreshSession();
+    if (renewed) res = await doFetch();
+  }
 
   if (!res.ok) {
     const errText = await res.text();
@@ -169,17 +271,42 @@ async function fetchApi<T>(
   return data as T | T[];
 }
 
-// Login mock mantido para compatibilidade com AuthContext
-const MOCK_USER: User = {
-  id: '1',
-  name: 'Usuário',
-  email: 'user@example.com',
-  token: 'local',
-};
-
 export const api = {
-  login: async (email: string, _password: string): Promise<User> => {
-    return { ...MOCK_USER, email };
+  /** Login real na API (email/senha → JWT + refresh_token persistidos). */
+  login: async (email: string, password: string): Promise<User> => {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.token) {
+      throw new Error(data?.error ? String(data.error) : 'Email ou senha inválidos');
+    }
+    setSession({
+      token: data.token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+    });
+    const userEmail: string = data.user?.email ?? email;
+    return {
+      id: data.user?.id ? String(data.user.id) : '',
+      name: userEmail.split('@')[0],
+      email: userEmail,
+      token: data.token,
+    };
+  },
+
+  /** Encerra a sessão na API (best effort) e limpa os tokens locais. */
+  logout: async (): Promise<void> => {
+    const token = localStorage.getItem(TOKEN_STORAGE);
+    if (token) {
+      fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
+    clearSession();
   },
 
   // Tasks

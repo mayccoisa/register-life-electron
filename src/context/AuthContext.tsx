@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { api, type User } from '../services/api';
+import { api, hasApiKey, hasSession, type User } from '../services/api';
 
 interface AuthContextType {
     user: User | null;
@@ -10,23 +10,25 @@ interface AuthContextType {
 }
 
 const REMEMBER_EMAIL = 'register-life-remember-email';
-const REMEMBER_PASSWORD = 'register-life-remember-password';
+// Legado: a senha não é mais persistida (a sessão se mantém via refresh
+// token). A chave antiga é limpa para não deixar senha em texto puro.
+const LEGACY_REMEMBER_PASSWORD = 'register-life-remember-password';
 
 export function getRememberedCredentials(): { email: string; password: string } {
     return {
         email: localStorage.getItem(REMEMBER_EMAIL) || '',
-        password: localStorage.getItem(REMEMBER_PASSWORD) || '',
+        password: '',
     };
 }
 
-export function setRememberedCredentials(email: string, password: string) {
+export function setRememberedCredentials(email: string, _password: string) {
     localStorage.setItem(REMEMBER_EMAIL, email);
-    localStorage.setItem(REMEMBER_PASSWORD, password);
+    localStorage.removeItem(LEGACY_REMEMBER_PASSWORD);
 }
 
 export function clearRememberedCredentials() {
     localStorage.removeItem(REMEMBER_EMAIL);
-    localStorage.removeItem(REMEMBER_PASSWORD);
+    localStorage.removeItem(LEGACY_REMEMBER_PASSWORD);
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,14 +38,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
+        // Só restaura o usuário se ainda existir uma sessão (JWT/refresh) ou,
+        // no modo legado, uma API key — senão força novo login.
         const storedUser = localStorage.getItem('register-life-user');
-        if (storedUser) {
+        if (storedUser && (hasSession() || hasApiKey())) {
             try {
                 setUser(JSON.parse(storedUser));
             } catch {
                 localStorage.removeItem('register-life-user');
             }
+        } else if (storedUser) {
+            localStorage.removeItem('register-life-user');
         }
+        // Higiene: remove senha persistida por versões antigas.
+        localStorage.removeItem(LEGACY_REMEMBER_PASSWORD);
     }, []);
 
     const login = async (email: string, pass: string, rememberMe = false) => {
@@ -63,6 +71,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const logout = () => {
+        api.logout().catch(() => {});
         setUser(null);
         localStorage.removeItem('register-life-user');
     };

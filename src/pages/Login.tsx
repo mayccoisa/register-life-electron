@@ -29,7 +29,7 @@ export const Login = () => {
             await login(email, password, rememberMe);
             navigate('/');
         } catch (err) {
-            setError('Email ou senha inválidos');
+            setError(err instanceof Error && err.message ? err.message : 'Email ou senha inválidos');
         }
     };
 
@@ -100,7 +100,7 @@ export const Login = () => {
                 </form>
 
                 <div style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    <p>Demo: user@demo.com / 1234</p>
+                    <p>Entre com a mesma conta do Register Life</p>
                 </div>
             </motion.div>
         </div>
