@@ -162,11 +162,31 @@ const STATUS_MAP: Record<string, Task['status']> = {
   'in-progress': 'in-progress',
   in_progress: 'in-progress',
   'em andamento': 'in-progress',
+  paused: 'in-progress', // timer pausado ainda é uma tarefa em andamento
   completed: 'completed',
   done: 'completed',
   concluida: 'completed',
   concluído: 'completed',
 };
+
+// Status internos do widget → aliases aceitos pela API (todo | in_progress | done).
+// Enviar os valores internos crus ('pending', 'completed') é rejeitado com 400.
+const STATUS_TO_API: Record<Task['status'], string> = {
+  pending: 'todo',
+  'in-progress': 'in_progress',
+  completed: 'done',
+};
+
+function toApiStatus(status: Task['status'] | undefined): string | undefined {
+  return status ? STATUS_TO_API[status] : undefined;
+}
+
+/** due_date é obrigatório na API; o widget não tem campo de data, então usa amanhã. */
+function defaultDueDate(): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return tomorrow.toISOString().split('T')[0];
+}
 
 function normalizeStatus(value: unknown): Task['status'] {
   if (!value) return 'pending';
@@ -325,7 +345,8 @@ export const api = {
     const body = {
       title: task.title,
       description: task.description ?? '',
-      status: task.status ?? 'pending',
+      status: toApiStatus(task.status) ?? 'todo',
+      due_date: defaultDueDate(),
     };
     const result = await fetchApi<Task>('/tasks', {
       method: 'POST',
@@ -341,15 +362,30 @@ export const api = {
     const body = {
       title: updates.title,
       description: updates.description,
-      status: updates.status,
+      status: toApiStatus(updates.status),
     };
     const result = await fetchApi<Task>(`/tasks/${id}`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify(body),
       normalizer: normalizeTask,
     });
     const arr = Array.isArray(result) ? result : [result];
     if (arr.length === 0) throw new Error('Resposta inválida ao atualizar tarefa');
+    return arr[0];
+  },
+
+  /**
+   * Mudança de status pela rota dedicada: o servidor move a tarefa para a
+   * coluna do tipo certo dentro do processo dela e grava o histórico.
+   */
+  updateTaskStatus: async (id: string, status: Task['status']): Promise<Task> => {
+    const result = await fetchApi<Task>(`/tasks/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: toApiStatus(status) }),
+      normalizer: normalizeTask,
+    });
+    const arr = Array.isArray(result) ? result : [result];
+    if (arr.length === 0) throw new Error('Resposta inválida ao atualizar status');
     return arr[0];
   },
 

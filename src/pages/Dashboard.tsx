@@ -99,7 +99,9 @@ export const Dashboard = () => {
 
   const handleStatusChange = async (task: Task, newStatus: Task['status']) => {
     try {
-      await api.updateTask(task.id, { ...task, status: newStatus });
+      // Rota dedicada de status: o servidor move a tarefa para a coluna certa
+      // do processo e registra o histórico.
+      await api.updateTaskStatus(task.id, newStatus);
       setTasks((prev) =>
         prev.map((t) => (t.id === task.id ? { ...t, status: newStatus } : t))
       );
